@@ -1,1 +1,375 @@
+---
+title: "Projet MAL"
+output: html_document
+---
+GROUPE : Mohamed TOUNSI et Auxence Mbaimou NGREMMADJI 
 
+OBJECTIF DU TP :
+Le but de ce TP est segmenter le territoire français en fonction des mesures de temperatures et des mesures de vents. Nous allons utilisé des methodes de clustering afin d'obtenir la meilleure segmentation possible. Un des objectif supplementaire est de faire la segmentation sur le vent et la temperature en même temps.
+
+```{r}
+rm(list=ls());
+load("weatherdata.Rdata")
+ls()
+```
+
+```{r}
+# CityLat=48.51; CityLong=2.20;
+# tabpos=(GPSpos$Lon-CityLong)^2+(GPSpos$Lat-CityLat)^2
+# i=which.min(tabpos);
+# par(mfrow=c(1,2))
+# plot(Temp[i,],type='l',lwd=2,xlab = 'time',ylab='time',col="blue");
+# plot(Wind[i,],type='l',lwd=2,xlab = 'time',ylab='time',col="blue");
+```
+#I) Préliminaire :
+Nous choisissons les 3 villes suivantes : 
+  -Lille : Latitude = 50.633
+           Longitude = 3. 067
+        
+  -Nantes : Latitude = 47.218
+            Longitude = -1.554
+
+  -Grenoble : Latitude = 45.189
+              Longitude = 5.725
+              
+```{r}
+#On créer un tableau regroupant les coordonnées de nos 3 villes ( ou on peut ajouter Paris)
+Paris = c(2.33,48.86) 
+Lille = c(3.067,50.633)
+Nantes= c(-1.554,47.218)
+Grenoble= c(5.725,45.189)
+X= rbind(Paris,Lille,Nantes,Grenoble)
+X <- as.data.frame(X)
+colnames(X)<-c("Long","Lat")
+```
+On renomme les villes pour chaque observations de 1 à 259 pour des questions de visualiation de nos résultats graphiques qui interviendrons par la suite:
+```{r}
+for (i in 1:length(Temp[,1])){
+  rownames(Temp)[i] <- i
+  rownames(Wind)[i] <- i
+}
+```
+
+
+Nous créer un petit algorithme afin d'affecter nos villes aux observations correspondantes dans les dataset Temp et Wind c'est à dire celle dont les coordonnées GPS sont les plus proches possibles :
+```{r}
+
+for (i in 1:length(X[,1])){
+  CityLong=X[i,1]; CityLat=X[i,2];
+  tabpos=(GPSpos$Lon-CityLong)^2+(GPSpos$Lat-CityLat)^2
+  k=which.min(tabpos)
+  rownames(Temp)[k] <- rownames(X)[i]
+  rownames(Wind)[k] <- rownames(X)[i]
+}
+
+```
+
+Nous allons afficher les villes choisies sur une carte de la France métropolitaine préalablement téléchargée.
+
+```{r}
+library(rworldmap)
+library(maptools)
+library(rgdal)
+library(ggplot2)
+France <- readShapeSpatial("geoflar-departements-2015.shp",proj4string=CRS("+proj=longlat"))
+plot(France,xlim=c(1,4),ylim=c(41.5,51))
+
+```
+
+```{r}
+plot(France,xlim=c(1,4),ylim=c(41.5,51))
+points(X[,1],X[,2],pch = 19 , col = c("red","blue","purple","darkgreen"))
+text(X[,1],X[,2],labels = rownames(X),cex = 0.9,pos = 4, font = 2)
+
+```
+
+#II) WIND CLUSTERING
+Dans cette section nous allons proceder au clustering des données concernant le vent.
+Nous verrons 2 méthodes de clustering, kmeans et le clustering hierarchique.
+##1) Raw Data
+
+###Le cas 1 : le clustering avec kmeans 
+Nous n'avons pas besoin de réduire car nous avons la même unité de mesure pour chaque colonne.
+```{r}
+Wind_sc <- scale(Wind, center = TRUE, scale= F)
+Temp_sc <- scale(Temp, center = TRUE, scale= F)
+```
+
+```{r}
+library(factoextra)
+fviz_nbclust(Wind_sc, kmeans, method = "wss") 
+fviz_nbclust(Wind_sc, FUN = hcut, method = "wss")
+```
+On a un "coude" à 4 cluster, d'ou le choix de la segmentation en 4 groupes pour les 2 méthodes (kmeans et hierachical clustering).
+
+```{r}
+set.seed(15)
+Wind_sc <- as.data.frame(Wind_sc)
+km_Wind <- kmeans(Wind_sc,centers=4,nstart = 25)
+ggplot(as.data.frame(GPSpos),aes(x=GPSpos$Lon,y=GPSpos$Lat,col =factor(km_Wind$cluster)))+geom_point(size=2,alpha = 0.8, position = "jitter")
+
+```
+
+#Le cas 2: hierachical clustering 
+On fait le choix de la méthode "ward.D2" car c'est celle qui nous donne la segmentation la mieux adaptée.
+```{r}
+library(cluster)
+hclust_wind <- hclust(dist(Wind_sc), method = "ward.D2")
+plot(hclust_wind,cex = 0.6, hang = -1, labels= F)
+rect.hclust(hclust_wind, k = 4, border = 2:6)
+abline(h=1300, col = "red")
+```
+```{r}
+library(dendextend)
+hclust_wind_obj <- as.dendrogram(hclust_wind)
+hclust_wind_dend <- color_branches(hclust_wind_obj, h=1300)
+plot(hclust_wind_dend)
+```
+
+```{r}
+library(dplyr)
+windhclust <- cutree(hclust_wind, k=4)
+s <- mutate(Wind_sc,cluster = windhclust)
+#ggplot(Wind,aes(GPSpos$Lon,GPSpos$Lat,color=factor(cluster)))+geom_point()
+ggplot(as.data.frame(GPSpos),aes(x=GPSpos$Lon,y=GPSpos$Lat,col =factor(windhclust)))+geom_point(size=2,alpha = 0.8, position = "jitter")
+```
+
+
+Conclusion : On constate que les deux méthodes de clustering renvoient quasiment la même segmentation à quelques differences (villes) près surtout du sud-ouest au nord-est. 
+
+#2)Feature extraction
+Nous allons maintenant faire notre étude en faisant une réduction des dimensions à l'aide de l'analyse des composantes principales (PCA).
+
+```{r}
+res.pca_wind = prcomp(Wind_sc, center = F)
+summary(res.pca_wind)
+```
+```{r}
+
+plot(cumsum((res.pca_wind$sdev)^2/sum((res.pca_wind$sdev)^2)),
+     ylim=c(0,1),xlim=c(0,20),type="b",
+     xlab= "Composantes Principales",
+     ylab= "Variance cumulée")
+```
+
+On choisit de conserver de maniere subjective 15 composantes qui correspondent à 85% de variances cumulées c'est à dire qu'on conserve 85% de l'information initiale.
+Avec 10 composantes principales nous avons accès à 81% de variances cumulées.
+
+```{r}
+ville.wind <- predict(res.pca_wind, newdata = Wind_sc)
+ville.wind <- ville.wind[,1:10]
+```
+### kmeans avec 10 composantes principales:
+```{r}
+Wind_pca <- as.data.frame(ville.wind)
+km_Wind_pca <- kmeans(Wind_pca,centers=4,nstart = 25)
+ggplot(as.data.frame(GPSpos),aes(x=GPSpos$Lon,y=GPSpos$Lat,col =factor(km_Wind_pca$cluster)))+geom_point(size=2,alpha = 0.8, position = "jitter")
+```
+###hierarchical clustering avec 10 composantes principales
+```{r}
+hclust_wind_pca <- hclust(dist(Wind_pca), method = "ward.D2")
+plot(hclust_wind_pca,cex = 0.6, hang = -1,labels= F)
+rect.hclust(hclust_wind_pca, k = 4, border = 2:6)
+abline(h=1300, col = "red")
+```
+
+```{r}
+library(dendextend)
+hclust_wind_pca_obj <- as.dendrogram(hclust_wind_pca)
+hclust_wind_pca_dend <- color_branches(hclust_wind_pca_obj, h=1300)
+plot(hclust_wind_pca_dend, cex = 0.3)
+```
+
+```{r}
+windhclust_pca <- cutree(hclust_wind_pca, k=4)
+#s <- mutate(Wind_pca,cluster = windhclust_pca )
+ggplot(as.data.frame(GPSpos),aes(x=GPSpos$Lon,y=GPSpos$Lat,col =factor(windhclust_pca)))+geom_point(size=2,alpha = 0.8, position = "jitter")
+```
+
+###Comparaison
+Kmeans avant et après PCA:
+```{r}
+par(mfrow = c(1,2))
+ggplot(as.data.frame(GPSpos),aes(x=GPSpos$Lon,y=GPSpos$Lat,col =factor(km_Wind$cluster)))+geom_point(size=2,alpha = 0.8, position = "jitter")
+ggplot(as.data.frame(GPSpos),aes(x=GPSpos$Lon,y=GPSpos$Lat,col =factor(km_Wind_pca$cluster)))+geom_point(size=2,alpha = 0.8, position = "jitter")
+```
+
+```{r}
+par(mfrow = c(1,2))
+ggplot(as.data.frame(GPSpos),aes(x=GPSpos$Lon,y=GPSpos$Lat,col =factor(windhclust_pca)))+geom_point(size=2,alpha = 0.8, position = "jitter")
+ggplot(as.data.frame(GPSpos),aes(x=GPSpos$Lon,y=GPSpos$Lat,col =factor(windhclust)))+geom_point(size=2,alpha = 0.8, position = "jitter")
+```
+On constate qu'on perd quand même de l'information autour du point de coordonnées (0;47) en utilisant uniquement 10 composantes principales pour le clustering hierarchique.
+
+Le kmeans lui renvoie des résultats plus ou moins similaires.
+
+
+#III) Temperature Clustering
+##1) Raw data
+
+```{r}
+fviz_nbclust(Temp_sc, kmeans, method = "wss") 
+fviz_nbclust(Temp_sc, FUN = hcut, method = "wss")
+```
+Là aussi le choix de 4 cluster est justifié.
+
+###Le cas 1 : le clustering avec kmeans 
+
+```{r}
+Temp_sc <- as.data.frame(Temp_sc)
+km_Temp <- kmeans(Temp_sc,centers=4,nstart = 25)
+ggplot(as.data.frame(GPSpos),aes(x=GPSpos$Lon,y=GPSpos$Lat,col =factor(km_Temp$cluster)))+geom_point(size=2,alpha = 0.8, position = "jitter")
+
+```
+#Le cas 2: hierachical clustering 
+```{r}
+hclust_temp <- hclust(dist(Temp_sc), method = "ward.D2")
+plot(hclust_temp,cex = 0.6, hang = -1, labels = F)
+rect.hclust(hclust_temp, k = 4, border = 2:6)
+abline(h=1600, col = "red")
+```
+
+```{r}
+hclust_temp_obj <- as.dendrogram(hclust_temp)
+hclust_temp_dend <- color_branches(hclust_temp_obj, h=1600)
+plot(hclust_temp_dend)
+```
+```{r}
+temphclust <- cutree(hclust_temp, k=4)
+#s <- mutate(Temp_sc,cluster = temphclust )
+ggplot(as.data.frame(GPSpos),aes(x=GPSpos$Lon,y=GPSpos$Lat,col =factor(temphclust)))+geom_point(size=2,alpha = 0.8, position = "jitter")
+```
+Conclusion : On constate que les deux méthodes de clustering renvoient quasiment la même segmentation à quelques differences (villes) près ou la temperature est basse ( zones neigeuse). 
+##2) Feature extraction
+Nous allons maintenant faire notre étude en faisant une réduction des dimensions à l'aide de l'analyse des composantes principales (PCA).
+
+```{r}
+res.pca_temp = prcomp(Temp_sc, center = F)
+summary(res.pca_temp)
+```
+```{r}
+
+plot(cumsum((res.pca_temp$sdev)^2/sum((res.pca_temp$sdev)^2)),
+     ylim=c(0,1),xlim=c(0,20),type="b",
+     xlab= "Composantes Principales",
+     ylab= "Variance cumulée")
+```
+
+On choisit de conserver de manière subjective 9 composantes qui correspondent à 90% de variances cumulées c'est à dire qu'on conserve 90% de l'information initiale car au dela de 9 composantes principales, la variance cumulée augmente très faiblement.
+Avec 10 composantes principales nous avons accès à 91% de variances cumulées.
+```{r}
+ville.temp <- predict(res.pca_temp, newdata = Temp_sc)
+ville.temp <- ville.temp[,1:10]
+```
+#kmeans : 
+```{r}
+Temp_pca <- as.data.frame(ville.temp)
+km_Temp_pca <- kmeans(Temp_pca,centers=4,nstart = 25)
+ggplot(as.data.frame(GPSpos),aes(x=GPSpos$Lon,y=GPSpos$Lat,col =factor(km_Temp_pca$cluster)))+geom_point(size=2,alpha = 0.8, position = "jitter")
+```
+#hierarchical
+```{r}
+hclust_temp_pca <- hclust(dist(Temp_pca), method = "ward.D2")
+plot(hclust_temp_pca,cex = 0.6, hang = -1)
+rect.hclust(hclust_temp_pca, k = 4, border = 2:6)
+abline(h=1600, col = "red")
+```
+
+```{r}
+library(dendextend)
+hclust_temp_pca_obj <- as.dendrogram(hclust_temp_pca)
+hclust_temp_pca_dend <- color_branches(hclust_temp_pca_obj, h=1600)
+plot(hclust_wind_pca_dend)
+```
+
+```{r}
+temphclust_pca <- cutree(hclust_temp_pca, k=4)
+s <- mutate(Temp_pca,cluster = temphclust_pca )
+ggplot(as.data.frame(GPSpos),aes(x=GPSpos$Lon,y=GPSpos$Lat,col =factor(temphclust_pca)))+geom_point(size=2,alpha = 0.8, position = "jitter")
+```
+###CLustering using model based
+EII :spherical, equal volume 
+VII :spherical, unequal volume
+VVI : diagonal, varying volume and shape
+
+```{r}
+library(mclust)
+```
+
+```{r}
+mc_temp_pca <- Mclust(Temp_pca,modelNames = c("EII","VII","VVI"))
+summary(mc_temp_pca)
+fviz_mclust(mc_temp_pca, "BIC", palette = "jco")
+```
+Ici le meilleur modèle est le VVI (diagonal, varying volume and shape)
+dont le nombre de cluster optimal est de 9. On peut aussi noter que pour les autres modèles ont un nombre de cluster optimal égal 9.
+```{r}
+mc_temp_pcat <- Mclust(Temp_pca)
+summary(mc_temp_pcat)
+fviz_mclust(mc_temp_pcat, "BIC", palette = "jco")
+```
+Comme quatrième modèle, nous avons décider de choisir le modèle VEV (ellipsoidal, equal volume) dont le nombre de cluster optimal est de 7.
+
+```{r}
+ggplot(as.data.frame(GPSpos),aes(x=GPSpos$Lon,y=GPSpos$Lat,col =factor(mc_temp_pcat$classification)))+geom_point(size=2,alpha = 0.8, position = "jitter")
+```
+
+#4) Clustering using specatral clustering
+```{r}
+library(kernlab)
+```
+
+```{r}
+Temp_pca <- as.matrix(Temp_pca)
+sc <- specc(Temp_pca,centers = 4)
+
+```
+```{r}
+sc1 = as.matrix(sc)
+plot(as.data.frame(GPSpos),col=sc)
+ggplot(as.data.frame(GPSpos),aes(x=GPSpos$Lon,y=GPSpos$Lat,col =factor(sc1)))+geom_point(size=2,alpha = 0.8, position = "jitter")
+```
+
+
+#IV) Temperature and Wind Clustering
+
+On a décidé de concater les deux dataset et,  de centrer et reduire le nouveau data set afin d'obtenir des données de même ordre car celles ci n'ont pas la même unité de mesure.
+Ensuite ayant donc le nouveau data set dont les dimensions sont de (259x15720), nous avons décidé de faire une ACP afin de réduire la dimension et supprimé les rondondances au sein de ces données.
+```{r}
+C=cbind(Temp,Wind)
+C_sc = scale(C, center = TRUE, scale= TRUE)
+```
+
+```{r}
+fviz_nbclust(C_sc, kmeans, method = "wss") 
+```
+À l'aide de la méthode du coude, le choix de 6 clusters nous semble le plus approprié.
+```{r}
+res.pca_tempwind <- prcomp(C_sc, center = F)
+summary(res.pca_tempwind)
+```
+
+```{r}
+plot(cumsum((res.pca_tempwind$sdev)^2/sum((res.pca_tempwind$sdev)^2)),
+     ylim=c(0,1),xlim=c(0,30),type="b",
+     xlab= "Composantes Principales",
+     ylab= "Variance cumulée")
+```
+L'augmentation de la variance cumulée est faible à partir de 20 composantes principales et pour 21 composantes principales nous avons 90% de l'information initiale.
+Donc pour notre étude nous choisirons de garder 21 composantes principales.
+
+```{r}
+ville.tempwind <- predict(res.pca_tempwind, newdata = C_sc)
+ville.tempwind <- ville.tempwind[,1:21]
+```
+
+
+
+Nous décidons d'utiliser l'algorithme kmeans pour cette question.
+```{r}
+tempwind_pca <- as.data.frame(ville.tempwind)
+km_tempwind_pca <- kmeans(tempwind_pca,centers=6,nstart = 25)
+ggplot(as.data.frame(GPSpos),aes(x=GPSpos$Lon,y=GPSpos$Lat,col =factor(km_tempwind_pca$cluster)))+geom_point(size=2,alpha = 0.8, position = "jitter")
+```
+
+Au vu de la réalité cette segmentation semble correcte.
